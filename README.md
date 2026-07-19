@@ -59,7 +59,7 @@ launchctl bootout gui/$(id -u)/com.tomoko.kakeibo-nightly
 - Claude Pro枠を使うため、レシートが極端に多い日(数十枚以上)は5時間あたりの利用上限に当たる可能性あり。その場合は翌晩に自動リトライされる
 - Tomokoさんは無料版のままでOK(処理はこのMacのあなたのアカウントで実行される)
 
-## ダッシュボード(dashboard/index.html)
+## ダッシュボード(docs/index.html)
 
 ブラウザで開くだけで使える家計簿ダッシュボード。メール+パスワードのログイン付き(Supabase Auth、家族以外はデータを見られない)。
 
@@ -69,9 +69,9 @@ launchctl bootout gui/$(id -u)/com.tomoko.kakeibo-nightly
 - 手入力での収入・支出の追加、既存明細の編集・削除
 - 食費は「食費(自炊)」と「外食」に自動分類される(夜間バッチが判定)
 
-使い方: `dashboard/index.html` をブラウザで開く(ダブルクリックでOK)。TomokoさんのPCにはこのファイルをコピーして渡せばよい(データは全てSupabase側にあり、ログインしないと見えない)。
+使い方: `docs/index.html` をブラウザで開く(ダブルクリックでOK)。TomokoさんのPCにはこのファイルをコピーして渡せばよい(データは全てSupabase側にあり、ログインしないと見えない)。
 
-ローカルでの動作確認は `.claude/launch.json` の `dashboard` サーバー(http://localhost:8765)でも可。
+ローカルでの動作確認は `.claude/launch.json` の `docs` サーバー(http://localhost:8765)でも可。
 
 ユーザー追加(私=Claudeに頼めば追加します): Supabase Auth管理APIで作成。初期パスワードは `logs/.temp_pw` に置き、ログイン後に「パスワード変更」ボタンで変更を推奨。
 
