@@ -58,12 +58,14 @@
 
 <div id="login-view" class="card" style="display:none">
   <h1>🍡 おうち家計簿</h1>
-  <label>メールアドレス</label>
-  <input id="login-email" type="email" autocomplete="username">
-  <label>パスワード</label>
-  <input id="login-password" type="password" autocomplete="current-password">
-  <div class="err" id="login-err"></div>
-  <button onclick="login()">ログイン</button>
+  <form id="login-form">
+    <label for="login-email">メールアドレス</label>
+    <input id="login-email" type="email" autocomplete="username" required>
+    <label for="login-password">パスワード</label>
+    <input id="login-password" type="password" autocomplete="current-password" required>
+    <div class="err" id="login-err"></div>
+    <button type="submit" id="login-btn">ログイン</button>
+  </form>
 </div>
 
 <div id="app-view" class="wrap" style="display:none">
@@ -162,12 +164,33 @@ function show(id) {
   document.getElementById("login-view").style.display = id === "login-view" ? "block" : "none";
   document.getElementById("app-view").style.display = id === "app-view" ? "block" : "none";
 }
+document.getElementById("login-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  login();
+});
 async function login() {
+  const btn = document.getElementById("login-btn");
+  const errEl = document.getElementById("login-err");
   const email = document.getElementById("login-email").value.trim();
   const password = document.getElementById("login-password").value;
-  const { error } = await db.auth.signInWithPassword({ email, password });
-  if (error) { document.getElementById("login-err").textContent = "ログインできません: " + error.message; return; }
-  showApp();
+  btn.disabled = true;
+  btn.textContent = "ログイン中…";
+  errEl.textContent = "";
+  try {
+    const { error } = await db.auth.signInWithPassword({ email, password });
+    if (error) {
+      errEl.textContent = error.message === "Invalid login credentials"
+        ? "メールアドレスまたはパスワードが違います"
+        : "ログインできません: " + error.message;
+      return;
+    }
+    showApp();
+  } catch (err) {
+    errEl.textContent = "通信エラー: " + (err?.message || err);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "ログイン";
+  }
 }
 async function logout() { await db.auth.signOut(); location.reload(); }
 async function changePassword() {
