@@ -24,8 +24,27 @@ ENV_PATH = PROJECT_DIR / ".env"
 CLAUDE_BIN = str(Path.home() / ".local/bin/claude")
 
 LOOKBACK_HOURS = 72  # この時間内の未処理メッセージを対象にする(失敗時は翌晩リトライされる)
-CATEGORIES = "食費(自炊)/外食/日用品/交通/医療/娯楽/教育/住居/光熱費/通信/衣類/その他"
 CURRENCY_SYMBOL = {"USD": "$", "KHR": "៛", "JPY": "¥"}
+
+# Zaimの分類体系(大分類→内訳)に合わせたカテゴリ構造。内訳はDB上は自由記述だが、
+# AIにはこの一覧から選ばせることで既存データと表記を揃える。
+CATEGORY_STRUCTURE = {
+    "食費": ["食料品", "朝ご飯", "昼ご飯", "晩ご飯", "外食", "カフェ", "会食", "お酒", "その他"],
+    "日用雑貨": ["消耗品", "その他"],
+    "住まい": ["家賃", "住宅ローン", "修繕・リフォーム", "その他"],
+    "水道・光熱": ["電気料金", "ガス料金", "水道料金", "その他"],
+    "クルマ": ["ガソリン", "駐車場", "車検・整備", "保険", "その他"],
+    "交通": ["電車", "バス", "タクシー", "飛行機", "その他"],
+    "医療": ["病院", "薬", "その他"],
+    "趣味・娯楽": ["旅行", "書籍", "映画・音楽", "ゲーム", "その他"],
+    "教育・教養": ["学費", "参考書", "セミナー", "その他"],
+    "通信費": ["携帯電話", "インターネット", "その他"],
+    "衣服・美容": ["衣服", "美容", "その他"],
+    "交際費": ["プレゼント", "交際費", "その他"],
+    "収入": ["給与所得", "お小遣い", "賞与", "副業", "その他"],
+    "その他": ["その他"],
+}
+CATEGORY_HINT = "\n".join(f"- {major}: {'/'.join(subs)}" for major, subs in CATEGORY_STRUCTURE.items())
 
 
 def log(msg: str) -> None:
@@ -153,10 +172,14 @@ RECEIPT_PROMPT = """{path} はレシート画像です。Readツールで読み�
   "purchased_time": "HH:MM" | null,
   "amount": number,
   "currency": "USD" | "KHR" | "JPY",
-  "category": "{categories}" のいずれか1つ,
+  "category_major": 下の大分類のいずれか1つ,
+  "category_sub": 選んだ大分類に対応する内訳のいずれか1つ,
   "items": [{{"name": string, "price": number}}],
   "memo": string | null
 }}
+
+カテゴリ一覧(大分類: 内訳):
+{category_hint}
 
 重要な注意:
 - 【リエル記号】カンボジアのレシートでは金額の先頭に riel 記号「៛」や「R」が付くことが多い。これは通貨記号であり、数字の「1」ではない。「៛9,400」を「19400」と読まないこと。
@@ -164,7 +187,7 @@ RECEIPT_PROMPT = """{path} はレシート画像です。Readツールで読み�
 - 【日付】カンボジアのレシートは DD/MM/YYYY または DD-MM-YY 形式が多い。月と日を取り違えないこと。時刻(HH:MM)もレシートに印字されていれば読み取る。
 - 【品名の翻訳】品名は自然な日本語に訳す。ただし確信が持てない場合は無理に訳さず原文(英語/クメール語のローマ字表記)のまま残す。商品コードや数字の羅列は品名にしない。
 - amount はレシートの合計金額。KHRの場合は整数。
-- レストラン・カフェ・屋台での飲食は「外食」、スーパー等での食材購入は「食費(自炊)」。
+- レストラン・カフェ・屋台での飲食は「食費」の「外食」または時間帯に応じて「朝ご飯」「昼ご飯」「晩ご飯」、スーパー等での食材購入は「食費」の「食料品」。
 - 読み取れない項目は null。
 - 画像がレシートでない場合は {{"not_receipt": true}} とだけ出力。"""
 
@@ -227,7 +250,7 @@ def process_receipts() -> int:
                     img_path = Path(tmp) / f"receipt.{ext}"
                     slack_download(f["url_private"], img_path)
                     raw = run_claude(
-                        RECEIPT_PROMPT.format(path=img_path, categories=CATEGORIES),
+                        RECEIPT_PROMPT.format(path=img_path, category_hint=CATEGORY_HINT),
                         RECEIPT_SYSTEM,
                         add_dir=tmp,
                         tools="Read",
@@ -247,7 +270,8 @@ def process_receipts() -> int:
                         "purchased_time": data.get("purchased_time"),
                         "amount": data.get("amount", 0),
                         "currency": data.get("currency", "USD"),
-                        "category": data.get("category", "その他"),
+                        "category_major": data.get("category_major", "その他"),
+                        "category_sub": data.get("category_sub", "その他"),
                         "items": data.get("items", []),
                         "memo": data.get("memo"),
                         "receipt_image_url": f.get("url_private"),
@@ -264,9 +288,10 @@ def process_receipts() -> int:
                 items_line = "".join(f"\n・{i.get('name')} {i.get('price')}" for i in items[:10])
                 when = " ".join(filter(None, [data.get("purchased_at"), data.get("purchased_time")]))
                 when_part = f"{when} " if when else ""
+                cat_label = f"{data.get('category_major')}/{data.get('category_sub')}"
                 slack_post_message(
                     channel,
-                    f"🧾 {when_part}{data.get('store_name') or '店名不明'} {sym}{amount_str}({data.get('category')})で記帳しました{items_line}\n違っていたらこのスレッドで教えてください(翌晩までに直します)。",
+                    f"🧾 {when_part}{data.get('store_name') or '店名不明'} {sym}{amount_str}({cat_label})で記帳しました{items_line}\n違っていたらこのスレッドで教えてください(翌晩までに直します)。",
                     msg["ts"],
                 )
                 count += 1
@@ -308,13 +333,16 @@ def process_corrections() -> int:
         try:
             raw = run_claude(
                 f"""家計簿の記帳内容:
-{json.dumps({k: record[k] for k in ('store_name', 'purchased_at', 'purchased_time', 'amount', 'currency', 'category', 'memo')}, ensure_ascii=False)}
+{json.dumps({k: record[k] for k in ('store_name', 'purchased_at', 'purchased_time', 'amount', 'currency', 'category_major', 'category_sub', 'memo')}, ensure_ascii=False)}
 
 ユーザーからの訂正メッセージ:
 {correction_text}
 
+カテゴリ一覧(大分類: 内訳):
+{CATEGORY_HINT}
+
 訂正を反映するJSONのみを出力:
-{{"updates": {{"store_name"?, "purchased_at"?, "purchased_time"?, "amount"?, "currency"?, "category"?({CATEGORIES}のいずれか), "memo"?}}, "reply": "短い確認返信(日本語)"}}
+{{"updates": {{"store_name"?, "purchased_at"?, "purchased_time"?, "amount"?, "currency"?, "category_major"?, "category_sub"?, "memo"?}}, "reply": "短い確認返信(日本語)"}}
 訂正と読み取れない場合は {{"updates": {{}}, "reply": "返答文"}}""",
                 RECEIPT_SYSTEM,
             )
@@ -391,7 +419,7 @@ def monthly_summary() -> None:
     label = f"{last_month_end.year}年{last_month_end.month}月"
 
     rows = supabase(
-        f"kakeibo_transactions?select=category,amount,currency&purchased_at=gte.{first}&purchased_at=lte.{last}"
+        f"kakeibo_transactions?select=category_major,amount,currency&purchased_at=gte.{first}&purchased_at=lte.{last}"
     )
     if not rows:
         slack_post_message(ENV["SLACK_KAKEIBO_CHANNEL_ID"], f"📊 {label}の記帳データがありませんでした。")
@@ -408,7 +436,7 @@ def monthly_summary() -> None:
         lines.append(f"\n【{currency}】合計 {sym}{total_str}")
         by_cat: dict[str, float] = {}
         for r in cur_rows:
-            by_cat[r["category"]] = by_cat.get(r["category"], 0) + float(r["amount"])
+            by_cat[r["category_major"]] = by_cat.get(r["category_major"], 0) + float(r["amount"])
         for cat, amt in sorted(by_cat.items(), key=lambda x: -x[1]):
             amt_str = f"{amt:,.0f}" if currency == "KHR" else f"{amt:,.2f}"
             lines.append(f"・{cat}: {sym}{amt_str}")

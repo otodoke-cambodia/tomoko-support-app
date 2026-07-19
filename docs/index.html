@@ -120,7 +120,8 @@
         <div><label>通貨</label>
           <select id="e-currency"><option>USD</option><option>KHR</option><option>JPY</option></select>
         </div>
-        <div><label>カテゴリ</label><select id="e-category"></select></div>
+        <div><label>カテゴリ</label><select id="e-category-major" onchange="onMajorChange()"></select></div>
+        <div><label>内訳</label><select id="e-category-sub"></select></div>
         <div style="flex:1; min-width:140px"><label>メモ</label><input id="e-memo" style="width:100%"></div>
         <div><button onclick="saveEntry()" id="save-btn">追加</button></div>
         <div id="cancel-edit" style="display:none"><button class="ghost" onclick="resetForm()">キャンセル</button></div>
@@ -147,7 +148,23 @@ const SUPABASE_URL = "https://nlzewynymilzhrocygoa.supabase.co";
 const SUPABASE_KEY = "sb_publishable_G3n4ny-Rd7O2q0_feOTBjQ_QtD7SsWC";
 const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-const CATEGORIES = ["食費(自炊)","外食","日用品","交通","医療","娯楽","教育","住居","光熱費","通信","衣類","収入","その他"];
+const CATEGORY_STRUCTURE = {
+  "食費": ["食料品","朝ご飯","昼ご飯","晩ご飯","外食","カフェ","会食","お酒","その他"],
+  "日用雑貨": ["消耗品","その他"],
+  "住まい": ["家賃","住宅ローン","修繕・リフォーム","その他"],
+  "水道・光熱": ["電気料金","ガス料金","水道料金","その他"],
+  "クルマ": ["ガソリン","駐車場","車検・整備","保険","その他"],
+  "交通": ["電車","バス","タクシー","飛行機","その他"],
+  "医療": ["病院","薬","その他"],
+  "趣味・娯楽": ["旅行","書籍","映画・音楽","ゲーム","その他"],
+  "教育・教養": ["学費","参考書","セミナー","その他"],
+  "通信費": ["携帯電話","インターネット","その他"],
+  "衣服・美容": ["衣服","美容","その他"],
+  "交際費": ["プレゼント","交際費","その他"],
+  "収入": ["給与所得","お小遣い","賞与","副業","その他"],
+  "その他": ["その他"],
+};
+const CATEGORY_MAJORS = Object.keys(CATEGORY_STRUCTURE);
 const SYM = { USD: "$", KHR: "៛", JPY: "¥" };
 const fmt = (amount, cur) => SYM[cur] + Number(amount).toLocaleString(undefined, cur === "KHR" || cur === "JPY" ? {maximumFractionDigits: 0} : {minimumFractionDigits: 2, maximumFractionDigits: 2});
 
@@ -206,20 +223,29 @@ async function showApp() {
   const now = new Date();
   viewYear = now.getFullYear(); viewMonth = now.getMonth() + 1;
   const catSel = document.getElementById("f-category");
-  const entrySel = document.getElementById("e-category");
-  CATEGORIES.forEach(c => {
+  const entrySel = document.getElementById("e-category-major");
+  CATEGORY_MAJORS.forEach(c => {
     catSel.add(new Option(c, c));
     entrySel.add(new Option(c, c));
   });
+  onMajorChange();
   document.getElementById("e-date").value = now.toISOString().slice(0, 10);
   document.getElementById("e-type").onchange = (e) => {
-    if (e.target.value === "income") document.getElementById("e-category").value = "収入";
+    if (e.target.value === "income") { document.getElementById("e-category-major").value = "収入"; onMajorChange(); }
   };
   await reload();
 }
+function onMajorChange() {
+  const major = document.getElementById("e-category-major").value;
+  const subSel = document.getElementById("e-category-sub");
+  const prev = subSel.value;
+  subSel.innerHTML = "";
+  (CATEGORY_STRUCTURE[major] || ["その他"]).forEach(s => subSel.add(new Option(s, s)));
+  if ([...subSel.options].some(o => o.value === prev)) subSel.value = prev;
+}
 async function reload() {
   const { data, error } = await db.from("kakeibo_transactions")
-    .select("id,entry_type,store_name,purchased_at,purchased_time,amount,currency,category,items,memo,created_at")
+    .select("id,entry_type,store_name,purchased_at,purchased_time,amount,currency,category_major,category_sub,items,memo,created_at")
     .order("purchased_at", { ascending: false, nullsFirst: false })
     .order("id", { ascending: false })
     .limit(10000);
@@ -245,9 +271,9 @@ function currentFilterRows() {
       const d = r.purchased_at || r.created_at.slice(0, 10);
       if (!d.startsWith(`${viewYear}-${String(viewMonth).padStart(2, "0")}`)) return false;
     }
-    if (cat && r.category !== cat) return false;
+    if (cat && r.category_major !== cat) return false;
     if (q) {
-      const hay = [r.store_name, r.memo, r.category, ...(r.items || []).map(i => i.name)].join(" ").toLowerCase();
+      const hay = [r.store_name, r.memo, r.category_major, r.category_sub, ...(r.items || []).map(i => i.name)].join(" ").toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
@@ -281,7 +307,7 @@ function render() {
   ["USD", "KHR", "JPY"].forEach(cur => {
     const byCat = {};
     rows.filter(r => r.currency === cur && r.entry_type !== "income")
-      .forEach(r => { byCat[r.category] = (byCat[r.category] || 0) + Number(r.amount); });
+      .forEach(r => { byCat[r.category_major] = (byCat[r.category_major] || 0) + Number(r.amount); });
     const entries = Object.entries(byCat).sort((a, b) => b[1] - a[1]);
     if (!entries.length) return;
     const max = entries[0][1];
@@ -310,7 +336,7 @@ function render() {
     tr.innerHTML = `
       <td style="white-space:nowrap">${r.purchased_at || "-"}${r.purchased_time ? `<div class="items-detail">${r.purchased_time.slice(0, 5)}</div>` : ""}</td>
       <td>${esc(r.store_name || "(不明)")}${r.memo ? `<div class="items-detail">📝 ${esc(r.memo)}</div>` : ""}${itemsHtml}</td>
-      <td><span class="tag ${isIncome ? "income" : ""}">${esc(r.category)}</span></td>
+      <td><span class="tag ${isIncome ? "income" : ""}">${esc(r.category_major)}${r.category_sub && r.category_sub !== "その他" ? " / " + esc(r.category_sub) : ""}</span></td>
       <td class="num ${isIncome ? "income-amt" : ""}">${isIncome ? "+" : ""}${fmt(r.amount, r.currency)}</td>
       <td style="white-space:nowrap">
         <button class="edit-link" onclick="startEdit(${r.id})">編集</button>
@@ -358,7 +384,9 @@ function startEdit(id) {
   document.getElementById("e-store").value = r.store_name || "";
   document.getElementById("e-amount").value = r.amount;
   document.getElementById("e-currency").value = r.currency;
-  document.getElementById("e-category").value = r.category;
+  document.getElementById("e-category-major").value = r.category_major;
+  onMajorChange();
+  document.getElementById("e-category-sub").value = r.category_sub;
   document.getElementById("e-memo").value = r.memo || "";
   document.getElementById("add-details").scrollIntoView({ behavior: "smooth" });
 }
@@ -371,7 +399,8 @@ async function saveEntry() {
     store_name: document.getElementById("e-store").value.trim() || null,
     amount: parseFloat(document.getElementById("e-amount").value),
     currency: document.getElementById("e-currency").value,
-    category: document.getElementById("e-category").value,
+    category_major: document.getElementById("e-category-major").value,
+    category_sub: document.getElementById("e-category-sub").value,
     memo: document.getElementById("e-memo").value.trim() || null,
   };
   if (!payload.amount || payload.amount <= 0) { errEl.textContent = "金額を入力してください"; return; }
