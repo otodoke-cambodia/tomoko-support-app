@@ -150,6 +150,7 @@ RECEIPT_PROMPT = """{path} はレシート画像です。Readツールで読み�
 {{
   "store_name": string | null,
   "purchased_at": "YYYY-MM-DD" | null,
+  "purchased_time": "HH:MM" | null,
   "amount": number,
   "currency": "USD" | "KHR" | "JPY",
   "category": "{categories}" のいずれか1つ,
@@ -157,10 +158,14 @@ RECEIPT_PROMPT = """{path} はレシート画像です。Readツールで読み�
   "memo": string | null
 }}
 
+重要な注意:
+- 【リエル記号】カンボジアのレシートでは金額の先頭に riel 記号「៛」や「R」が付くことが多い。これは通貨記号であり、数字の「1」ではない。「៛9,400」を「19400」と読まないこと。
+- 【検算】items の price 合計が amount(合計金額)とほぼ一致するか必ず検算する。一致しない場合は、通貨記号を数字として誤読していないか・桁を見直してから出力する(割引や税がある場合はその旨を memo に書く)。
+- 【日付】カンボジアのレシートは DD/MM/YYYY または DD-MM-YY 形式が多い。月と日を取り違えないこと。時刻(HH:MM)もレシートに印字されていれば読み取る。
+- 【品名の翻訳】品名は自然な日本語に訳す。ただし確信が持てない場合は無理に訳さず原文(英語/クメール語のローマ字表記)のまま残す。商品コードや数字の羅列は品名にしない。
 - amount はレシートの合計金額。KHRの場合は整数。
 - レストラン・カフェ・屋台での飲食は「外食」、スーパー等での食材購入は「食費(自炊)」。
-- クメール語のレシートでも品名はできるだけ読み取り、不明瞭なら英語で概要を書く。
-- 日付が読み取れなければ null。
+- 読み取れない項目は null。
 - 画像がレシートでない場合は {{"not_receipt": true}} とだけ出力。"""
 
 HEARING_SYSTEM = "あなたは家事最適化AIのプロダクトマネージャーです。指示されたJSON形式のみを出力し、説明文は書きません。"
@@ -239,6 +244,7 @@ def process_receipts() -> int:
                         "slack_user_id": msg.get("user", ""),
                         "store_name": data.get("store_name"),
                         "purchased_at": data.get("purchased_at"),
+                        "purchased_time": data.get("purchased_time"),
                         "amount": data.get("amount", 0),
                         "currency": data.get("currency", "USD"),
                         "category": data.get("category", "その他"),
@@ -256,9 +262,11 @@ def process_receipts() -> int:
                 amount_str = f"{amount:,.0f}" if data.get("currency") == "KHR" else f"{amount:,.2f}"
                 items = data.get("items") or []
                 items_line = "".join(f"\n・{i.get('name')} {i.get('price')}" for i in items[:10])
+                when = " ".join(filter(None, [data.get("purchased_at"), data.get("purchased_time")]))
+                when_part = f"{when} " if when else ""
                 slack_post_message(
                     channel,
-                    f"🧾 {data.get('store_name') or '店名不明'} {sym}{amount_str}({data.get('category')})で記帳しました{items_line}\n違っていたらこのスレッドで教えてください(翌晩までに直します)。",
+                    f"🧾 {when_part}{data.get('store_name') or '店名不明'} {sym}{amount_str}({data.get('category')})で記帳しました{items_line}\n違っていたらこのスレッドで教えてください(翌晩までに直します)。",
                     msg["ts"],
                 )
                 count += 1
@@ -300,13 +308,13 @@ def process_corrections() -> int:
         try:
             raw = run_claude(
                 f"""家計簿の記帳内容:
-{json.dumps({k: record[k] for k in ('store_name', 'purchased_at', 'amount', 'currency', 'category', 'memo')}, ensure_ascii=False)}
+{json.dumps({k: record[k] for k in ('store_name', 'purchased_at', 'purchased_time', 'amount', 'currency', 'category', 'memo')}, ensure_ascii=False)}
 
 ユーザーからの訂正メッセージ:
 {correction_text}
 
 訂正を反映するJSONのみを出力:
-{{"updates": {{"store_name"?, "purchased_at"?, "amount"?, "currency"?, "category"?({CATEGORIES}のいずれか), "memo"?}}, "reply": "短い確認返信(日本語)"}}
+{{"updates": {{"store_name"?, "purchased_at"?, "purchased_time"?, "amount"?, "currency"?, "category"?({CATEGORIES}のいずれか), "memo"?}}, "reply": "短い確認返信(日本語)"}}
 訂正と読み取れない場合は {{"updates": {{}}, "reply": "返答文"}}""",
                 RECEIPT_SYSTEM,
             )

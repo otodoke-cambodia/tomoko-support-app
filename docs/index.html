@@ -219,7 +219,7 @@ async function showApp() {
 }
 async function reload() {
   const { data, error } = await db.from("kakeibo_transactions")
-    .select("id,entry_type,store_name,purchased_at,amount,currency,category,items,memo,created_at")
+    .select("id,entry_type,store_name,purchased_at,purchased_time,amount,currency,category,items,memo,created_at")
     .order("purchased_at", { ascending: false, nullsFirst: false })
     .order("id", { ascending: false })
     .limit(10000);
@@ -308,7 +308,7 @@ function render() {
           matchedItems.includes(i) ? `<b>${esc(i.name)} ${i.price}</b>` : `${esc(i.name)} ${i.price}`
         ).join(" ／ ")}</div>` : "";
     tr.innerHTML = `
-      <td style="white-space:nowrap">${r.purchased_at || "-"}</td>
+      <td style="white-space:nowrap">${r.purchased_at || "-"}${r.purchased_time ? `<div class="items-detail">${r.purchased_time.slice(0, 5)}</div>` : ""}</td>
       <td>${esc(r.store_name || "(不明)")}${r.memo ? `<div class="items-detail">📝 ${esc(r.memo)}</div>` : ""}${itemsHtml}</td>
       <td><span class="tag ${isIncome ? "income" : ""}">${esc(r.category)}</span></td>
       <td class="num ${isIncome ? "income-amt" : ""}">${isIncome ? "+" : ""}${fmt(r.amount, r.currency)}</td>
