@@ -10,6 +10,11 @@
     --bg: #f7f6f3; --card: #ffffff; --text: #33322e; --sub: #8a887f;
     --line: #e8e6e0; --accent: #7c9070; --accent-dark: #5f7355;
     --income: #4a7fa5; --danger: #b3593e;
+    /* カテゴリカラー(固定割当、8色まで。超過分は--cat-otherに集約) */
+    --cat-food: #2a78d6; --cat-daily: #1baf7a; --cat-home: #eda100; --cat-utility: #008300;
+    --cat-car: #4a3aa7; --cat-transport: #e34948; --cat-medical: #e87ba4; --cat-hobby: #eb6834;
+    --cat-other: #898781;
+    --saving: #4a3aa7;
   }
   * { box-sizing: border-box; }
   body { margin: 0; font-family: "Hiragino Sans", "Noto Sans JP", sans-serif; background: var(--bg); color: var(--text); font-size: 15px; }
@@ -28,11 +33,30 @@
   .total-box .cur { font-size: 12px; color: var(--sub); }
   .total-box .amt { font-size: 22px; font-weight: 600; margin: 2px 0; }
   .total-box .sub-line { font-size: 12px; color: var(--sub); }
-  .cat-bars { margin-top: 10px; }
-  .cat-bar { display: flex; align-items: center; gap: 8px; margin: 4px 0; font-size: 13px; }
-  .cat-bar .name { width: 90px; flex-shrink: 0; }
-  .cat-bar .bar { height: 10px; background: var(--accent); border-radius: 5px; opacity: .75; }
-  .cat-bar .val { color: var(--sub); }
+  .donut-block { display: flex; flex-wrap: wrap; gap: 24px; align-items: center; margin-top: 12px; }
+  .donut-wrap { position: relative; width: 180px; height: 180px; flex-shrink: 0; }
+  .donut-wrap svg { width: 180px; height: 180px; }
+  .donut-slice { cursor: pointer; transition: opacity .12s; }
+  .donut-slice:hover { opacity: .85; }
+  .donut-center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; pointer-events: none; }
+  .donut-center .amt { font-size: 18px; font-weight: 600; }
+  .donut-center .label { font-size: 11px; color: var(--sub); }
+  .legend-list { flex: 1; min-width: 200px; }
+  .legend-row { display: flex; align-items: center; gap: 8px; font-size: 13px; margin: 5px 0; }
+  .legend-row .swatch { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
+  .legend-row .legend-name { flex-shrink: 0; }
+  .legend-row .legend-val { color: var(--sub); margin-left: auto; }
+  .legend-pct { color: var(--sub); }
+  .donut-tooltip { position: fixed; background: var(--text); color: #fff; font-size: 12px; padding: 5px 9px; border-radius: 6px; pointer-events: none; z-index: 50; display: none; white-space: nowrap; }
+  .currency-block { margin-bottom: 18px; }
+  .currency-block:last-child { margin-bottom: 0; }
+  .currency-block > .cur-label { font-size: 12px; color: var(--sub); margin-bottom: 4px; }
+  .savings-row { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+  .savings-row:last-child { border-bottom: none; }
+  .savings-row .acct-name { font-weight: 600; }
+  .savings-row .acct-bal { margin-left: auto; font-weight: 600; color: var(--saving); }
+  .tag.saving { background: #ece9f6; color: var(--saving); }
+  .saving-amt { color: var(--saving); font-weight: 600; }
   table { width: 100%; border-collapse: collapse; font-size: 14px; }
   th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
   th { font-size: 12px; color: var(--sub); font-weight: normal; }
@@ -101,21 +125,34 @@
 
   <div class="card">
     <div class="totals" id="totals"></div>
-    <div class="cat-bars" id="cat-bars"></div>
+    <div id="donut-area"></div>
+  </div>
+
+  <div class="card">
+    <h2 style="font-size:15px; margin:0 0 8px">🏦 貯蓄・投資の残高(全期間合計)</h2>
+    <div id="savings-balances"></div>
   </div>
 
   <div class="card">
     <details id="add-details">
-      <summary id="form-title">➕ 手入力で追加(収入・現金払いなど)</summary>
+      <summary id="form-title">➕ 手入力で追加(収入・貯蓄・現金払いなど)</summary>
       <div class="row" style="margin-top:12px">
         <div><label>種別</label>
-          <select id="e-type">
+          <select id="e-type" onchange="onTypeChange()">
             <option value="expense">支出</option>
             <option value="income">収入</option>
+            <option value="saving">貯蓄・投資</option>
           </select>
         </div>
         <div><label>日付</label><input id="e-date" type="date"></div>
-        <div><label>店名 / 収入源</label><input id="e-store" placeholder="例: 給与、市場"></div>
+        <div id="e-store-wrap"><label>店名 / 収入源</label><input id="e-store" placeholder="例: 給与、市場"></div>
+        <div id="e-account-wrap" style="display:none"><label>口座名</label><input id="e-account-name" placeholder="例: ABA銀行、米国株"></div>
+        <div id="e-direction-wrap" style="display:none"><label>入出金</label>
+          <select id="e-direction">
+            <option value="deposit">入金(積立)</option>
+            <option value="withdraw">出金(引き出し)</option>
+          </select>
+        </div>
         <div><label>金額</label><input id="e-amount" type="number" step="0.01" style="width:110px"></div>
         <div><label>通貨</label>
           <select id="e-currency"><option>USD</option><option>KHR</option><option>JPY</option></select>
@@ -143,6 +180,8 @@
   </div>
 </div>
 
+<div class="donut-tooltip" id="donut-tooltip"></div>
+
 <script>
 const SUPABASE_URL = "https://nlzewynymilzhrocygoa.supabase.co";
 const SUPABASE_KEY = "sb_publishable_G3n4ny-Rd7O2q0_feOTBjQ_QtD7SsWC";
@@ -162,9 +201,16 @@ const CATEGORY_STRUCTURE = {
   "衣服・美容": ["衣服","美容","その他"],
   "交際費": ["プレゼント","交際費","その他"],
   "収入": ["給与所得","お小遣い","賞与","副業","その他"],
+  "貯蓄・投資": ["貯金","投資","その他"],
   "その他": ["その他"],
 };
 const CATEGORY_MAJORS = Object.keys(CATEGORY_STRUCTURE);
+// 円グラフの固定カラー割当(識別=色。8色まで、それ以外は「その他」に集約して灰色)
+const CATEGORY_COLORS = {
+  "食費": "#2a78d6", "日用雑貨": "#1baf7a", "住まい": "#eda100", "水道・光熱": "#008300",
+  "クルマ": "#4a3aa7", "交通": "#e34948", "医療": "#e87ba4", "趣味・娯楽": "#eb6834",
+};
+const OTHER_COLOR = "#898781";
 const SYM = { USD: "$", KHR: "៛", JPY: "¥" };
 const fmt = (amount, cur) => SYM[cur] + Number(amount).toLocaleString(undefined, cur === "KHR" || cur === "JPY" ? {maximumFractionDigits: 0} : {minimumFractionDigits: 2, maximumFractionDigits: 2});
 
@@ -230,9 +276,6 @@ async function showApp() {
   });
   onMajorChange();
   document.getElementById("e-date").value = now.toISOString().slice(0, 10);
-  document.getElementById("e-type").onchange = (e) => {
-    if (e.target.value === "income") { document.getElementById("e-category-major").value = "収入"; onMajorChange(); }
-  };
   await reload();
 }
 function onMajorChange() {
@@ -243,15 +286,25 @@ function onMajorChange() {
   (CATEGORY_STRUCTURE[major] || ["その他"]).forEach(s => subSel.add(new Option(s, s)));
   if ([...subSel.options].some(o => o.value === prev)) subSel.value = prev;
 }
+function onTypeChange() {
+  const type = document.getElementById("e-type").value;
+  document.getElementById("e-store-wrap").style.display = type === "saving" ? "none" : "";
+  document.getElementById("e-account-wrap").style.display = type === "saving" ? "" : "none";
+  document.getElementById("e-direction-wrap").style.display = type === "saving" ? "" : "none";
+  if (type === "income") document.getElementById("e-category-major").value = "収入";
+  if (type === "saving") document.getElementById("e-category-major").value = "貯蓄・投資";
+  onMajorChange();
+}
 async function reload() {
   const { data, error } = await db.from("kakeibo_transactions")
-    .select("id,entry_type,store_name,purchased_at,purchased_time,amount,currency,category_major,category_sub,items,memo,created_at")
+    .select("id,entry_type,store_name,account_name,purchased_at,purchased_time,amount,currency,category_major,category_sub,items,memo,created_at")
     .order("purchased_at", { ascending: false, nullsFirst: false })
     .order("id", { ascending: false })
     .limit(10000);
   if (error) { alert("データ取得エラー: " + error.message); return; }
   allRows = data;
   render();
+  renderSavingsBalances();
 }
 
 // ---------- render ----------
@@ -284,13 +337,13 @@ function render() {
   const rows = currentFilterRows();
   const q = document.getElementById("f-search").value.trim().toLowerCase();
 
-  // 集計(通貨別)
+  // 集計(通貨別、支出/収入/貯蓄は明確に区別する)
   const totalsEl = document.getElementById("totals");
   totalsEl.innerHTML = "";
   ["USD", "KHR", "JPY"].forEach(cur => {
     const curRows = rows.filter(r => r.currency === cur);
     if (!curRows.length) return;
-    const expense = curRows.filter(r => r.entry_type !== "income").reduce((s, r) => s + Number(r.amount), 0);
+    const expense = curRows.filter(r => r.entry_type === "expense").reduce((s, r) => s + Number(r.amount), 0);
     const income = curRows.filter(r => r.entry_type === "income").reduce((s, r) => s + Number(r.amount), 0);
     const box = document.createElement("div");
     box.className = "total-box";
@@ -301,25 +354,22 @@ function render() {
   });
   if (!totalsEl.innerHTML) totalsEl.innerHTML = '<span class="muted">該当データがありません</span>';
 
-  // カテゴリ内訳(支出のみ、通貨別に最大値基準のバー)
-  const barsEl = document.getElementById("cat-bars");
-  barsEl.innerHTML = "";
+  // カテゴリ内訳の円グラフ(支出のみ、通貨ごとに1枚)
+  const donutArea = document.getElementById("donut-area");
+  donutArea.innerHTML = "";
   ["USD", "KHR", "JPY"].forEach(cur => {
     const byCat = {};
-    rows.filter(r => r.currency === cur && r.entry_type !== "income")
+    rows.filter(r => r.currency === cur && r.entry_type === "expense")
       .forEach(r => { byCat[r.category_major] = (byCat[r.category_major] || 0) + Number(r.amount); });
-    const entries = Object.entries(byCat).sort((a, b) => b[1] - a[1]);
+    const entries = Object.entries(byCat);
     if (!entries.length) return;
-    const max = entries[0][1];
-    entries.forEach(([cat, amt]) => {
-      const div = document.createElement("div");
-      div.className = "cat-bar";
-      div.innerHTML = `<span class="name">${cat}</span>
-        <div class="bar" style="width:${Math.max(4, amt / max * 220)}px"></div>
-        <span class="val">${fmt(amt, cur)}</span>`;
-      barsEl.appendChild(div);
-    });
+    const total = entries.reduce((s, [, amt]) => s + amt, 0);
+    const block = document.createElement("div");
+    block.className = "currency-block";
+    block.innerHTML = `<div class="cur-label">${cur} の支出内訳</div>` + buildDonut(entries, cur, total);
+    donutArea.appendChild(block);
   });
+  if (!donutArea.innerHTML) donutArea.innerHTML = '<span class="muted">この期間の支出データがありません</span>';
 
   // 明細テーブル
   const tbody = document.getElementById("rows");
@@ -327,17 +377,23 @@ function render() {
   rows.forEach(r => {
     const tr = document.createElement("tr");
     const isIncome = r.entry_type === "income";
+    const isSaving = r.entry_type === "saving";
     const matchedItems = q ? (r.items || []).filter(i => (i.name || "").toLowerCase().includes(q)) : [];
     if (matchedItems.length) tr.className = "search-hit";
     const itemsHtml = (r.items || []).length
       ? `<div class="items-detail">${(r.items).map(i =>
           matchedItems.includes(i) ? `<b>${esc(i.name)} ${i.price}</b>` : `${esc(i.name)} ${i.price}`
         ).join(" ／ ")}</div>` : "";
+    const nameCell = isSaving
+      ? `🏦 ${esc(r.account_name || "(口座未設定)")}<div class="items-detail">${Number(r.amount) < 0 ? "出金" : "入金"}</div>`
+      : `${esc(r.store_name || "(不明)")}${r.memo ? `<div class="items-detail">📝 ${esc(r.memo)}</div>` : ""}${itemsHtml}`;
+    const amtClass = isIncome ? "income-amt" : isSaving ? "saving-amt" : "";
+    const sign = isIncome || (isSaving && Number(r.amount) > 0) ? "+" : "";
     tr.innerHTML = `
       <td style="white-space:nowrap">${r.purchased_at || "-"}${r.purchased_time ? `<div class="items-detail">${r.purchased_time.slice(0, 5)}</div>` : ""}</td>
-      <td>${esc(r.store_name || "(不明)")}${r.memo ? `<div class="items-detail">📝 ${esc(r.memo)}</div>` : ""}${itemsHtml}</td>
-      <td><span class="tag ${isIncome ? "income" : ""}">${esc(r.category_major)}${r.category_sub && r.category_sub !== "その他" ? " / " + esc(r.category_sub) : ""}</span></td>
-      <td class="num ${isIncome ? "income-amt" : ""}">${isIncome ? "+" : ""}${fmt(r.amount, r.currency)}</td>
+      <td>${nameCell}</td>
+      <td><span class="tag ${isIncome ? "income" : ""} ${isSaving ? "saving" : ""}">${esc(r.category_major)}${r.category_sub && r.category_sub !== "その他" ? " / " + esc(r.category_sub) : ""}</span></td>
+      <td class="num ${amtClass}">${sign}${fmt(r.amount, r.currency)}</td>
       <td style="white-space:nowrap">
         <button class="edit-link" onclick="startEdit(${r.id})">編集</button>
         <button class="danger-link" onclick="removeEntry(${r.id})">削除</button>
@@ -362,13 +418,94 @@ function render() {
 }
 function esc(s) { const d = document.createElement("span"); d.textContent = s ?? ""; return d.innerHTML; }
 
+// ---------- 円グラフ(ドーナツ) ----------
+function buildDonut(entries, currency, total) {
+  // 識別色を持たないカテゴリは「その他」にまとめる(色は8つまで、生成しない)
+  const grouped = [];
+  let otherAmt = 0;
+  entries.forEach(([cat, amt]) => {
+    if (CATEGORY_COLORS[cat]) grouped.push([cat, amt, CATEGORY_COLORS[cat]]);
+    else otherAmt += amt;
+  });
+  if (otherAmt > 0) grouped.push(["その他", otherAmt, OTHER_COLOR]);
+  grouped.sort((a, b) => b[1] - a[1]);
+
+  const R = 70, CX = 90, CY = 90, STROKE = 26, GAP = 3;
+  const C = 2 * Math.PI * R;
+  let offset = 0;
+  const slices = grouped.map(([cat, amt, color]) => {
+    const frac = amt / total;
+    const len = Math.max(0, frac * C - GAP);
+    const circle = `<circle class="donut-slice" cx="${CX}" cy="${CY}" r="${R}" fill="none" stroke="${color}" stroke-width="${STROKE}"
+      stroke-dasharray="${len} ${(C - len).toFixed(1)}" stroke-dashoffset="${(-offset).toFixed(1)}"
+      transform="rotate(-90 ${CX} ${CY})"
+      data-tooltip="${esc(cat)}: ${esc(fmt(amt, currency))} (${(frac * 100).toFixed(0)}%)"></circle>`;
+    offset += frac * C;
+    return circle;
+  });
+
+  const legend = grouped.map(([cat, amt, color]) => `
+    <div class="legend-row">
+      <span class="swatch" style="background:${color}"></span>
+      <span class="legend-name">${esc(cat)}</span>
+      <span class="legend-val">${fmt(amt, currency)} <span class="legend-pct">(${(amt / total * 100).toFixed(0)}%)</span></span>
+    </div>`).join("");
+
+  return `<div class="donut-block">
+    <div class="donut-wrap">
+      <svg viewBox="0 0 180 180">${slices.join("")}</svg>
+      <div class="donut-center"><div class="amt">${fmt(total, currency)}</div><div class="label">合計</div></div>
+    </div>
+    <div class="legend-list">${legend}</div>
+  </div>`;
+}
+
+(function setupDonutTooltip() {
+  const tip = document.getElementById("donut-tooltip");
+  document.addEventListener("mouseover", (e) => {
+    const el = e.target.closest?.(".donut-slice");
+    if (!el) return;
+    tip.textContent = el.getAttribute("data-tooltip");
+    tip.style.display = "block";
+  });
+  document.addEventListener("mousemove", (e) => {
+    if (tip.style.display !== "block") return;
+    tip.style.left = (e.clientX + 12) + "px";
+    tip.style.top = (e.clientY + 12) + "px";
+  });
+  document.addEventListener("mouseout", (e) => {
+    if (e.target.closest?.(".donut-slice")) tip.style.display = "none";
+  });
+})();
+
+// ---------- 貯蓄・投資の残高(全期間、口座別) ----------
+function renderSavingsBalances() {
+  const el = document.getElementById("savings-balances");
+  const savingRows = allRows.filter(r => r.entry_type === "saving");
+  if (!savingRows.length) { el.innerHTML = '<span class="muted">まだ貯蓄・投資の記録がありません。下のフォームから追加できます。</span>'; return; }
+
+  const byAccount = {};
+  savingRows.forEach(r => {
+    const key = (r.account_name || "(口座未設定)") + "|" + r.currency;
+    byAccount[key] = byAccount[key] || { name: r.account_name || "(口座未設定)", currency: r.currency, balance: 0 };
+    byAccount[key].balance += Number(r.amount);
+  });
+  el.innerHTML = Object.values(byAccount)
+    .sort((a, b) => b.balance - a.balance)
+    .map(a => `<div class="savings-row"><span class="acct-name">🏦 ${esc(a.name)}</span><span class="acct-bal">${fmt(a.balance, a.currency)}</span></div>`)
+    .join("");
+}
+
 // ---------- create / update / delete ----------
 function resetForm() {
   editingId = null;
-  document.getElementById("form-title").textContent = "➕ 手入力で追加(収入・現金払いなど)";
+  document.getElementById("form-title").textContent = "➕ 手入力で追加(収入・貯蓄・現金払いなど)";
   document.getElementById("save-btn").textContent = "追加";
   document.getElementById("cancel-edit").style.display = "none";
-  ["e-store", "e-amount", "e-memo"].forEach(id => document.getElementById(id).value = "");
+  ["e-store", "e-amount", "e-memo", "e-account-name"].forEach(id => document.getElementById(id).value = "");
+  document.getElementById("e-type").value = "expense";
+  document.getElementById("e-direction").value = "deposit";
+  onTypeChange();
   document.getElementById("entry-err").textContent = "";
 }
 function startEdit(id) {
@@ -376,13 +513,18 @@ function startEdit(id) {
   if (!r) return;
   editingId = id;
   document.getElementById("add-details").open = true;
-  document.getElementById("form-title").textContent = `✏️ 編集中: ${r.store_name || r.purchased_at || "#" + id}`;
+  document.getElementById("form-title").textContent = `✏️ 編集中: ${r.store_name || r.account_name || r.purchased_at || "#" + id}`;
   document.getElementById("save-btn").textContent = "保存";
   document.getElementById("cancel-edit").style.display = "block";
   document.getElementById("e-type").value = r.entry_type || "expense";
+  onTypeChange();
   document.getElementById("e-date").value = r.purchased_at || "";
   document.getElementById("e-store").value = r.store_name || "";
-  document.getElementById("e-amount").value = r.amount;
+  document.getElementById("e-account-name").value = r.account_name || "";
+  if (r.entry_type === "saving") {
+    document.getElementById("e-direction").value = Number(r.amount) < 0 ? "withdraw" : "deposit";
+  }
+  document.getElementById("e-amount").value = Math.abs(r.amount);
   document.getElementById("e-currency").value = r.currency;
   document.getElementById("e-category-major").value = r.category_major;
   onMajorChange();
@@ -393,17 +535,23 @@ function startEdit(id) {
 async function saveEntry() {
   const errEl = document.getElementById("entry-err");
   errEl.textContent = "";
+  const type = document.getElementById("e-type").value;
+  const rawAmount = parseFloat(document.getElementById("e-amount").value);
+  if (!rawAmount || rawAmount <= 0) { errEl.textContent = "金額を入力してください"; return; }
+  const accountName = document.getElementById("e-account-name").value.trim();
+  if (type === "saving" && !accountName) { errEl.textContent = "口座名を入力してください"; return; }
+
   const payload = {
-    entry_type: document.getElementById("e-type").value,
+    entry_type: type,
     purchased_at: document.getElementById("e-date").value || null,
-    store_name: document.getElementById("e-store").value.trim() || null,
-    amount: parseFloat(document.getElementById("e-amount").value),
+    store_name: type === "saving" ? null : (document.getElementById("e-store").value.trim() || null),
+    account_name: type === "saving" ? accountName : null,
+    amount: type === "saving" && document.getElementById("e-direction").value === "withdraw" ? -rawAmount : rawAmount,
     currency: document.getElementById("e-currency").value,
     category_major: document.getElementById("e-category-major").value,
     category_sub: document.getElementById("e-category-sub").value,
     memo: document.getElementById("e-memo").value.trim() || null,
   };
-  if (!payload.amount || payload.amount <= 0) { errEl.textContent = "金額を入力してください"; return; }
   const q = editingId
     ? db.from("kakeibo_transactions").update(payload).eq("id", editingId)
     : db.from("kakeibo_transactions").insert(payload);
