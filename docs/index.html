@@ -125,7 +125,20 @@
 
   <div class="card">
     <div class="totals" id="totals"></div>
+    <div class="muted" id="jpy-missing-note" style="margin-top:6px"></div>
     <div id="donut-area"></div>
+  </div>
+
+  <div class="card">
+    <details id="rate-details">
+      <summary>💴 為替レート設定(<span id="rate-month-label"></span>の円換算用)</summary>
+      <div class="row" style="margin-top:12px">
+        <div><label>USD → JPY(1ドルあたり)</label><input id="rate-usd" type="number" step="0.01" style="width:110px"></div>
+        <div><label>KHR → JPY(1リエルあたり)</label><input id="rate-khr" type="number" step="0.0001" style="width:110px"></div>
+        <div><button onclick="saveRate()">保存</button></div>
+      </div>
+      <div class="err" id="rate-err"></div>
+    </details>
   </div>
 
   <div class="card">
@@ -215,6 +228,7 @@ const SYM = { USD: "$", KHR: "៛", JPY: "¥" };
 const fmt = (amount, cur) => SYM[cur] + Number(amount).toLocaleString(undefined, cur === "KHR" || cur === "JPY" ? {maximumFractionDigits: 0} : {minimumFractionDigits: 2, maximumFractionDigits: 2});
 
 let allRows = [];
+let ratesMap = {}; // year_month(YYYY-MM) -> {usd_jpy, khr_jpy}
 let viewYear, viewMonth; // month: 1-12
 let editingId = null;
 
@@ -303,8 +317,44 @@ async function reload() {
     .limit(10000);
   if (error) { alert("データ取得エラー: " + error.message); return; }
   allRows = data;
+  await loadRates();
   render();
   renderSavingsBalances();
+}
+async function loadRates() {
+  const { data, error } = await db.from("kakeibo_exchange_rates").select("*");
+  if (error) { console.error("rates load error", error); return; }
+  ratesMap = {};
+  data.forEach(r => { ratesMap[r.year_month] = r; });
+}
+function rowYearMonth(r) {
+  const d = r.purchased_at || r.created_at;
+  return d ? d.slice(0, 7) : null;
+}
+function jpyRateFor(yearMonth, currency) {
+  if (currency === "JPY") return 1;
+  if (!yearMonth) return null;
+  const rec = ratesMap[yearMonth];
+  const key = currency === "USD" ? "usd_jpy" : currency === "KHR" ? "khr_jpy" : null;
+  return (rec && rec[key] != null) ? Number(rec[key]) : null;
+}
+function refreshRateForm() {
+  const ym = `${viewYear}-${String(viewMonth).padStart(2, "0")}`;
+  document.getElementById("rate-month-label").textContent = `${viewYear}年${viewMonth}月`;
+  const rec = ratesMap[ym];
+  document.getElementById("rate-usd").value = rec?.usd_jpy ?? "";
+  document.getElementById("rate-khr").value = rec?.khr_jpy ?? "";
+}
+async function saveRate() {
+  const errEl = document.getElementById("rate-err");
+  const ym = `${viewYear}-${String(viewMonth).padStart(2, "0")}`;
+  const usd = document.getElementById("rate-usd").value ? parseFloat(document.getElementById("rate-usd").value) : null;
+  const khr = document.getElementById("rate-khr").value ? parseFloat(document.getElementById("rate-khr").value) : null;
+  const { error } = await db.from("kakeibo_exchange_rates").upsert({ year_month: ym, usd_jpy: usd, khr_jpy: khr, updated_at: new Date().toISOString() });
+  if (error) { errEl.textContent = "保存エラー: " + error.message; return; }
+  errEl.textContent = "";
+  await loadRates();
+  render();
 }
 
 // ---------- render ----------
@@ -334,6 +384,7 @@ function currentFilterRows() {
 }
 function render() {
   document.getElementById("month-label").textContent = `${viewYear}年${viewMonth}月`;
+  refreshRateForm();
   const rows = currentFilterRows();
   const q = document.getElementById("f-search").value.trim().toLowerCase();
 
@@ -352,6 +403,28 @@ function render() {
       <div class="sub-line">支出${income ? ` ｜ 収入 ${fmt(income, cur)} ｜ 収支 ${fmt(income - expense, cur)}` : ""}</div>`;
     totalsEl.appendChild(box);
   });
+
+  // 円換算合計(各取引が発生した月のレートを使う。レート未設定分は除外して件数を注記)
+  let jpyExpense = 0, jpyIncome = 0, missing = 0, convertedAny = false;
+  rows.filter(r => r.entry_type === "expense" || r.entry_type === "income").forEach(r => {
+    const rate = jpyRateFor(rowYearMonth(r), r.currency);
+    if (rate == null) { missing++; return; }
+    convertedAny = true;
+    const jpyAmt = Number(r.amount) * rate;
+    if (r.entry_type === "expense") jpyExpense += jpyAmt; else jpyIncome += jpyAmt;
+  });
+  if (convertedAny) {
+    const box = document.createElement("div");
+    box.className = "total-box";
+    box.innerHTML = `<div class="cur">円換算(JPY)</div>
+      <div class="amt">${fmt(jpyExpense, "JPY")}</div>
+      <div class="sub-line">支出 ｜ 収入 ${fmt(jpyIncome, "JPY")} ｜ 収支 ${fmt(jpyIncome - jpyExpense, "JPY")}</div>`;
+    totalsEl.appendChild(box);
+  }
+  document.getElementById("jpy-missing-note").textContent = missing
+    ? `※ ${missing}件はその月の為替レートが未設定のため円換算に含まれていません(下の「為替レート設定」から入力できます)`
+    : "";
+
   if (!totalsEl.innerHTML) totalsEl.innerHTML = '<span class="muted">該当データがありません</span>';
 
   // カテゴリ内訳の円グラフ(支出のみ、通貨ごとに1枚)
