@@ -42,7 +42,8 @@
   .donut-center .amt { font-size: 18px; font-weight: 600; }
   .donut-center .label { font-size: 11px; color: var(--sub); }
   .legend-list { flex: 1; min-width: 200px; }
-  .legend-row { display: flex; align-items: center; gap: 8px; font-size: 13px; margin: 5px 0; }
+  .legend-row { display: flex; align-items: center; gap: 8px; font-size: 13px; margin: 5px 0; cursor: pointer; border-radius: 6px; padding: 2px 4px; margin-left: -4px; }
+  .legend-row:hover { background: var(--bg); }
   .legend-row .swatch { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
   .legend-row .legend-name { flex-shrink: 0; }
   .legend-row .legend-val { color: var(--sub); margin-left: auto; }
@@ -224,6 +225,7 @@ const CATEGORY_COLORS = {
   "クルマ": "#4a3aa7", "交通": "#e34948", "医療": "#e87ba4", "趣味・娯楽": "#eb6834",
 };
 const OTHER_COLOR = "#898781";
+const CHART_OTHER_FILTER = "__chart_other__"; // 円グラフで「その他」に集約されたカテゴリ全体を指す絞り込み値
 const SYM = { USD: "$", KHR: "៛", JPY: "¥" };
 const fmt = (amount, cur) => SYM[cur] + Number(amount).toLocaleString(undefined, cur === "KHR" || cur === "JPY" ? {maximumFractionDigits: 0} : {minimumFractionDigits: 2, maximumFractionDigits: 2});
 
@@ -288,6 +290,7 @@ async function showApp() {
     catSel.add(new Option(c, c));
     entrySel.add(new Option(c, c));
   });
+  catSel.add(new Option("その他(円グラフでまとめた分)", CHART_OTHER_FILTER));
   onMajorChange();
   document.getElementById("e-date").value = now.toISOString().slice(0, 10);
   await reload();
@@ -374,7 +377,12 @@ function currentFilterRows() {
       const d = r.purchased_at || r.created_at.slice(0, 10);
       if (!d.startsWith(`${viewYear}-${String(viewMonth).padStart(2, "0")}`)) return false;
     }
-    if (cat && r.category_major !== cat) return false;
+    if (cat === CHART_OTHER_FILTER) {
+      // 円グラフの「その他」は支出のみが対象(グラフ自体が支出しか描画していないため)
+      if (r.entry_type !== "expense" || CATEGORY_COLORS[r.category_major]) return false;
+    } else if (cat && r.category_major !== cat) {
+      return false;
+    }
     if (q) {
       const hay = [r.store_name, r.memo, r.category_major, r.category_sub, ...(r.items || []).map(i => i.name)].join(" ").toLowerCase();
       if (!hay.includes(q)) return false;
@@ -509,20 +517,25 @@ function buildDonut(entries, currency, total) {
   const slices = grouped.map(([cat, amt, color]) => {
     const frac = amt / total;
     const len = Math.max(0, frac * C - GAP);
+    const filterVal = cat === "その他" ? CHART_OTHER_FILTER : cat;
     const circle = `<circle class="donut-slice" cx="${CX}" cy="${CY}" r="${R}" fill="none" stroke="${color}" stroke-width="${STROKE}"
       stroke-dasharray="${len} ${(C - len).toFixed(1)}" stroke-dashoffset="${(-offset).toFixed(1)}"
       transform="rotate(-90 ${CX} ${CY})"
-      data-tooltip="${esc(cat)}: ${esc(fmt(amt, currency))} (${(frac * 100).toFixed(0)}%)"></circle>`;
+      data-filter="${esc(filterVal)}"
+      data-tooltip="${esc(cat)}: ${esc(fmt(amt, currency))} (${(frac * 100).toFixed(0)}%) ・クリックで絞り込み"></circle>`;
     offset += frac * C;
     return circle;
   });
 
-  const legend = grouped.map(([cat, amt, color]) => `
-    <div class="legend-row">
+  const legend = grouped.map(([cat, amt, color]) => {
+    const filterVal = cat === "その他" ? CHART_OTHER_FILTER : cat;
+    return `
+    <div class="legend-row" data-filter="${esc(filterVal)}" title="クリックで「${esc(cat)}」に絞り込み">
       <span class="swatch" style="background:${color}"></span>
       <span class="legend-name">${esc(cat)}</span>
       <span class="legend-val">${fmt(amt, currency)} <span class="legend-pct">(${(amt / total * 100).toFixed(0)}%)</span></span>
-    </div>`).join("");
+    </div>`;
+  }).join("");
 
   return `<div class="donut-block">
     <div class="donut-wrap">
@@ -550,6 +563,18 @@ function buildDonut(entries, currency, total) {
     if (e.target.closest?.(".donut-slice")) tip.style.display = "none";
   });
 })();
+
+// スライス・凡例のクリックでそのカテゴリに絞り込む
+document.addEventListener("click", (e) => {
+  const el = e.target.closest?.(".donut-slice, .legend-row");
+  if (!el) return;
+  const filterVal = el.getAttribute("data-filter");
+  if (filterVal == null) return;
+  const catSel = document.getElementById("f-category");
+  catSel.value = catSel.value === filterVal ? "" : filterVal; // 同じカテゴリを再クリックしたら解除
+  render();
+  document.getElementById("hit-note").scrollIntoView({ behavior: "smooth", block: "start" });
+});
 
 // ---------- 貯蓄・投資の残高(全期間、口座別) ----------
 function renderSavingsBalances() {
