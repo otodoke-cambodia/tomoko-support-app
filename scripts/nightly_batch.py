@@ -162,7 +162,7 @@ def extract_json(raw: str) -> dict:
     return json.loads(text[start : end + 1])
 
 
-RECEIPT_SYSTEM = "あなたはレシート読み取りアシスタントです。指示されたJSON形式のみを出力し、説明文は書きません。"
+RECEIPT_SYSTEM = "あなたは家計簿Slackボット「Omochi」です。レシート読み取り担当として、指示されたJSON形式のみを出力し、説明文は書きません。"
 
 RECEIPT_PROMPT = """{path} はレシート画像です。Readツールで読み取り、以下のJSONのみを出力してください。
 
@@ -191,7 +191,7 @@ RECEIPT_PROMPT = """{path} はレシート画像です。Readツールで読み�
 - 読み取れない項目は null。
 - 画像がレシートでない場合は {{"not_receipt": true}} とだけ出力。"""
 
-HEARING_SYSTEM = "あなたは家事最適化AIのプロダクトマネージャーです。指示されたJSON形式のみを出力し、説明文は書きません。"
+HEARING_SYSTEM = "あなたは家計簿Slackボット「Omochi」です。家事最適化AIのプロダクトマネージャーとして、指示されたJSON形式のみを出力し、説明文は書きません。"
 
 HEARING_PROMPT = """家族がSlackの要望チャンネルに次の投稿をしました:
 
