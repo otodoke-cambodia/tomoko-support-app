@@ -466,14 +466,14 @@ function render() {
           matchedItems.includes(i) ? `<b>${esc(i.name)} ${i.price}</b>` : `${esc(i.name)} ${i.price}`
         ).join(" ／ ")}</div>` : "";
     const nameCell = isSaving
-      ? `🏦 ${esc(r.account_name || "(口座未設定)")}<div class="items-detail">${Number(r.amount) < 0 ? "出金" : "入金"}</div>`
-      : `${esc(r.store_name || "(不明)")}${r.memo ? `<div class="items-detail">📝 ${esc(r.memo)}</div>` : ""}${itemsHtml}`;
+      ? `🏦 ${highlightMatch(r.account_name || "(口座未設定)", q)}<div class="items-detail">${Number(r.amount) < 0 ? "出金" : "入金"}</div>`
+      : `${highlightMatch(r.store_name || "(不明)", q)}${r.memo ? `<div class="items-detail">📝 ${highlightMatch(r.memo, q)}</div>` : ""}${itemsHtml}`;
     const amtClass = isIncome ? "income-amt" : isSaving ? "saving-amt" : "";
     const sign = isIncome || (isSaving && Number(r.amount) > 0) ? "+" : "";
     tr.innerHTML = `
       <td style="white-space:nowrap">${r.purchased_at || "-"}${r.purchased_time ? `<div class="items-detail">${r.purchased_time.slice(0, 5)}</div>` : ""}</td>
       <td>${nameCell}</td>
-      <td><span class="tag ${isIncome ? "income" : ""} ${isSaving ? "saving" : ""}">${esc(r.category_major)}${r.category_sub && r.category_sub !== "その他" ? " / " + esc(r.category_sub) : ""}</span></td>
+      <td><span class="tag ${isIncome ? "income" : ""} ${isSaving ? "saving" : ""}">${highlightMatch(r.category_major, q)}${r.category_sub && r.category_sub !== "その他" ? " / " + highlightMatch(r.category_sub, q) : ""}</span></td>
       <td class="num ${amtClass}">${sign}${fmt(r.amount, r.currency)}</td>
       <td style="white-space:nowrap">
         <button class="edit-link" onclick="startEdit(${r.id})">編集</button>
@@ -498,6 +498,15 @@ function render() {
   }
 }
 function esc(s) { const d = document.createElement("span"); d.textContent = s ?? ""; return d.innerHTML; }
+// 検索語に一致した部分を太字にする(HTMLエスケープしてから最初の一致箇所だけ<b>で囲む)
+function highlightMatch(text, q) {
+  if (text == null) return "";
+  const str = String(text);
+  if (!q) return esc(str);
+  const idx = str.toLowerCase().indexOf(q.toLowerCase());
+  if (idx === -1) return esc(str);
+  return esc(str.slice(0, idx)) + "<b>" + esc(str.slice(idx, idx + q.length)) + "</b>" + esc(str.slice(idx + q.length));
+}
 
 // ---------- 円グラフ(ドーナツ) ----------
 function buildDonut(entries, currency, total) {
