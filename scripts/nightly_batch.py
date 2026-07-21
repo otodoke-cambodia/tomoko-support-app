@@ -2,7 +2,8 @@
 """Tomoko Support APP 夜間バッチ。
 
 毎晩launchdから起動され、以下を1回で処理する:
-1. #家計簿 の未記帳レシート画像を Claude CLI (Pro枠) で読み取り → Supabase記帳 → スレッド返信
+1. #家計簿 の未記帳レシート画像、および写真のないテキストのみの支出/収入投稿を
+   Claude CLI (Pro枠) で読み取り・解析 → Supabase記帳 → スレッド返信
 2. #tomokoの要望 の新規投稿に機能提案を生成 → Supabase保存 → スレッド返信
 3. 毎月1日は前月の通貨別・カテゴリ別サマリーを投稿
 
@@ -191,6 +192,32 @@ RECEIPT_PROMPT = """{path} はレシート画像です。Readツールで読み�
 - 読み取れない項目は null。
 - 画像がレシートでない場合は {{"not_receipt": true}} とだけ出力。"""
 
+TEXT_ENTRY_SYSTEM = "あなたは家計簿アシスタントです。指示されたJSON形式のみを出力し、説明文は書きません。"
+
+TEXT_ENTRY_PROMPT = """次のテキストは家計簿チャンネルへの投稿です。レシートの写真がない支出・収入を、文章で記録しようとしている可能性があります。
+
+---
+{text}
+---
+
+以下のJSONのみを出力してください。
+
+{{
+  "entry_type": "expense" | "income",
+  "store_name": string | null,
+  "purchased_at": "YYYY-MM-DD" | null(投稿文に日付が書かれていなければnull。投稿日が自動的に使われる),
+  "amount": number,
+  "currency": "USD" | "KHR" | "JPY"(明記がなければ文脈上最も自然な通貨。カンボジアの生活なので通常はUSD),
+  "category_major": 下の大分類のいずれか1つ,
+  "category_sub": 選んだ大分類に対応する内訳のいずれか1つ,
+  "memo": string | null
+}}
+
+カテゴリ一覧(大分類: 内訳):
+{category_hint}
+
+金額や取引の内容が読み取れない雑談・質問・要望などの投稿の場合は {{"not_entry": true}} とだけ出力してください。"""
+
 HEARING_SYSTEM = "あなたは家事最適化AIのプロダクトマネージャーです。指示されたJSON形式のみを出力し、説明文は書きません。"
 
 HEARING_PROMPT = """家族がSlackの要望チャンネルに次の投稿をしました:
@@ -235,6 +262,7 @@ def process_receipts() -> int:
             continue
         images = [f for f in msg.get("files", []) if f.get("mimetype", "").startswith("image/")]
         if not images:
+            count += process_text_entry(channel, msg)
             continue
         if already_recorded(msg["ts"]):
             continue
@@ -299,6 +327,56 @@ def process_receipts() -> int:
             except Exception as e:
                 log(f"receipt failed ts={msg['ts']}: {e}")
     return count
+
+
+def process_text_entry(channel: str, msg: dict) -> int:
+    """写真なしのテキストのみの投稿を支出/収入として記帳する(雑談等は not_entry で無視)。"""
+    text = (msg.get("text") or "").strip()
+    if not text or already_recorded(msg["ts"]):
+        return 0
+    try:
+        raw = run_claude(TEXT_ENTRY_PROMPT.format(text=text, category_hint=CATEGORY_HINT), TEXT_ENTRY_SYSTEM)
+        data = extract_json(raw)
+        if data.get("not_entry"):
+            return 0
+
+        purchased_at = data.get("purchased_at") or datetime.fromtimestamp(float(msg["ts"])).strftime("%Y-%m-%d")
+        entry_type = data.get("entry_type") if data.get("entry_type") in ("expense", "income") else "expense"
+        supabase(
+            "kakeibo_transactions?on_conflict=slack_message_ts",
+            "POST",
+            {
+                "entry_type": entry_type,
+                "slack_user_id": msg.get("user", ""),
+                "store_name": data.get("store_name"),
+                "purchased_at": purchased_at,
+                "amount": data.get("amount", 0),
+                "currency": data.get("currency", "USD"),
+                "category_major": data.get("category_major", "その他"),
+                "category_sub": data.get("category_sub", "その他"),
+                "items": [],
+                "memo": data.get("memo"),
+                "slack_channel_id": channel,
+                "slack_message_ts": msg["ts"],
+                "raw_ai_response": data,
+            },
+            prefer="resolution=ignore-duplicates,return=minimal",
+        )
+        sym = CURRENCY_SYMBOL.get(data.get("currency", ""), "")
+        amount = data.get("amount", 0)
+        amount_str = f"{amount:,.0f}" if data.get("currency") == "KHR" else f"{amount:,.2f}"
+        cat_label = f"{data.get('category_major')}/{data.get('category_sub')}"
+        sign = "+" if entry_type == "income" else ""
+        slack_post_message(
+            channel,
+            f"✍️ {purchased_at} {data.get('store_name') or '(店名なし)'} {sign}{sym}{amount_str}({cat_label})で記帳しました\n違っていたらこのスレッドで教えてください(翌晩までに直します)。",
+            msg["ts"],
+        )
+        log(f"recorded text entry ts={msg['ts']} {data.get('store_name')} {sym}{amount_str}")
+        return 1
+    except Exception as e:
+        log(f"text entry failed ts={msg['ts']}: {e}")
+        return 0
 
 
 # ---------- 2. 訂正処理(記帳済みスレッドへの返信) ----------
