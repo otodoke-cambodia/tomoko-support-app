@@ -26,6 +26,14 @@ CLAUDE_BIN = str(Path.home() / ".local/bin/claude")
 
 LOOKBACK_HOURS = 72  # この時間内の未処理メッセージを対象にする(失敗時は翌晩リトライされる)
 CURRENCY_SYMBOL = {"USD": "$", "KHR": "៛", "JPY": "¥"}
+KHR_TO_USD = 4000  # 1USD = 4000KHR固定レート。リエルはSlack返信・サマリーで常にドル換算して見せる
+
+
+def display_amount(amount: float, currency: str) -> str:
+    """リエルは1USD=4000KHR固定でドル換算し、元のリエル額も併記する。"""
+    if currency == "KHR":
+        return f"${amount / KHR_TO_USD:,.2f}(៛{amount:,.0f})"
+    return f"{CURRENCY_SYMBOL.get(currency, '')}{amount:,.2f}"
 
 # Zaimの分類体系(大分類→内訳)に合わせたカテゴリ構造。内訳はDB上は自由記述だが、
 # AIにはこの一覧から選ばせることで既存データと表記を揃える。
@@ -309,9 +317,7 @@ def process_receipts() -> int:
                     },
                     prefer="resolution=ignore-duplicates,return=minimal",
                 )
-                sym = CURRENCY_SYMBOL.get(data.get("currency", ""), "")
-                amount = data.get("amount", 0)
-                amount_str = f"{amount:,.0f}" if data.get("currency") == "KHR" else f"{amount:,.2f}"
+                amount_display = display_amount(data.get("amount", 0), data.get("currency", "USD"))
                 items = data.get("items") or []
                 items_line = "".join(f"\n・{i.get('name')} {i.get('price')}" for i in items[:10])
                 when = " ".join(filter(None, [data.get("purchased_at"), data.get("purchased_time")]))
@@ -319,11 +325,11 @@ def process_receipts() -> int:
                 cat_label = f"{data.get('category_major')}/{data.get('category_sub')}"
                 slack_post_message(
                     channel,
-                    f"🧾 {when_part}{data.get('store_name') or '店名不明'} {sym}{amount_str}({cat_label})で記帳しました{items_line}\n違っていたらこのスレッドで教えてください(翌晩までに直します)。",
+                    f"🧾 {when_part}{data.get('store_name') or '店名不明'} {amount_display}({cat_label})で記帳しました{items_line}\n違っていたらこのスレッドで教えてください(翌晩までに直します)。",
                     msg["ts"],
                 )
                 count += 1
-                log(f"recorded receipt ts={record_ts} {data.get('store_name')} {sym}{amount_str}")
+                log(f"recorded receipt ts={record_ts} {data.get('store_name')} {amount_display}")
             except Exception as e:
                 log(f"receipt failed ts={msg['ts']}: {e}")
     return count
@@ -362,17 +368,15 @@ def process_text_entry(channel: str, msg: dict) -> int:
             },
             prefer="resolution=ignore-duplicates,return=minimal",
         )
-        sym = CURRENCY_SYMBOL.get(data.get("currency", ""), "")
-        amount = data.get("amount", 0)
-        amount_str = f"{amount:,.0f}" if data.get("currency") == "KHR" else f"{amount:,.2f}"
+        amount_display = display_amount(data.get("amount", 0), data.get("currency", "USD"))
         cat_label = f"{data.get('category_major')}/{data.get('category_sub')}"
         sign = "+" if entry_type == "income" else ""
         slack_post_message(
             channel,
-            f"✍️ {purchased_at} {data.get('store_name') or '(店名なし)'} {sign}{sym}{amount_str}({cat_label})で記帳しました\n違っていたらこのスレッドで教えてください(翌晩までに直します)。",
+            f"✍️ {purchased_at} {data.get('store_name') or '(店名なし)'} {sign}{amount_display}({cat_label})で記帳しました\n違っていたらこのスレッドで教えてください(翌晩までに直します)。",
             msg["ts"],
         )
-        log(f"recorded text entry ts={msg['ts']} {data.get('store_name')} {sym}{amount_str}")
+        log(f"recorded text entry ts={msg['ts']} {data.get('store_name')} {amount_display}")
         return 1
     except Exception as e:
         log(f"text entry failed ts={msg['ts']}: {e}")
@@ -503,21 +507,24 @@ def monthly_summary() -> None:
         slack_post_message(ENV["SLACK_KAKEIBO_CHANNEL_ID"], f"📊 {label}の記帳データがありませんでした。")
         return
 
+    def amount_in_usd(r: dict) -> float:
+        v = float(r["amount"])
+        return v / KHR_TO_USD if r["currency"] == "KHR" else v
+
     lines = [f"📊 {label}の家計簿サマリー"]
-    for currency in ("USD", "KHR", "JPY"):
-        cur_rows = [r for r in rows if r["currency"] == currency]
+    for currency in ("USD", "JPY"):
+        cur_rows = [r for r in rows if r["currency"] == currency or (currency == "USD" and r["currency"] == "KHR")]
         if not cur_rows:
             continue
         sym = CURRENCY_SYMBOL[currency]
-        total = sum(float(r["amount"]) for r in cur_rows)
-        total_str = f"{total:,.0f}" if currency == "KHR" else f"{total:,.2f}"
-        lines.append(f"\n【{currency}】合計 {sym}{total_str}")
+        label_suffix = "(リエル換算込み)" if currency == "USD" and any(r["currency"] == "KHR" for r in rows) else ""
+        total = sum(amount_in_usd(r) for r in cur_rows)
+        lines.append(f"\n【{currency}{label_suffix}】合計 {sym}{total:,.2f}")
         by_cat: dict[str, float] = {}
         for r in cur_rows:
-            by_cat[r["category_major"]] = by_cat.get(r["category_major"], 0) + float(r["amount"])
+            by_cat[r["category_major"]] = by_cat.get(r["category_major"], 0) + amount_in_usd(r)
         for cat, amt in sorted(by_cat.items(), key=lambda x: -x[1]):
-            amt_str = f"{amt:,.0f}" if currency == "KHR" else f"{amt:,.2f}"
-            lines.append(f"・{cat}: {sym}{amt_str}")
+            lines.append(f"・{cat}: {sym}{amt:,.2f}")
 
     slack_post_message(ENV["SLACK_KAKEIBO_CHANNEL_ID"], "\n".join(lines))
     log("monthly summary posted")

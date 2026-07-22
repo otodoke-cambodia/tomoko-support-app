@@ -135,9 +135,9 @@
       <summary>💴 為替レート設定(<span id="rate-month-label"></span>の円換算用)</summary>
       <div class="row" style="margin-top:12px">
         <div><label>USD → JPY(1ドルあたり)</label><input id="rate-usd" type="number" step="0.01" style="width:110px"></div>
-        <div><label>KHR → JPY(1リエルあたり)</label><input id="rate-khr" type="number" step="0.0001" style="width:110px"></div>
         <div><button onclick="saveRate()">保存</button></div>
       </div>
+      <div class="muted" style="margin-top:6px">リエルは1USD=៛4,000固定でドルに換算してから、このUSD→JPYレートを使います。</div>
       <div class="err" id="rate-err"></div>
     </details>
   </div>
@@ -228,6 +228,8 @@ const OTHER_COLOR = "#898781";
 const CHART_OTHER_FILTER = "__chart_other__"; // 円グラフで「その他」に集約されたカテゴリ全体を指す絞り込み値
 const SYM = { USD: "$", KHR: "៛", JPY: "¥" };
 const fmt = (amount, cur) => SYM[cur] + Number(amount).toLocaleString(undefined, cur === "KHR" || cur === "JPY" ? {maximumFractionDigits: 0} : {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const KHR_TO_USD = 4000; // 1USD = 4000KHR固定レート。リエル建ての金額は常にこれでドル換算して表示する
+const toUSD = (amount, cur) => cur === "KHR" ? Number(amount) / KHR_TO_USD : Number(amount);
 
 let allRows = [];
 let ratesMap = {}; // year_month(YYYY-MM) -> {usd_jpy, khr_jpy}
@@ -338,22 +340,23 @@ function jpyRateFor(yearMonth, currency) {
   if (currency === "JPY") return 1;
   if (!yearMonth) return null;
   const rec = ratesMap[yearMonth];
-  const key = currency === "USD" ? "usd_jpy" : currency === "KHR" ? "khr_jpy" : null;
-  return (rec && rec[key] != null) ? Number(rec[key]) : null;
+  const usdJpy = (rec && rec.usd_jpy != null) ? Number(rec.usd_jpy) : null;
+  if (currency === "USD") return usdJpy;
+  // KHRは固定レートでUSDに換算してからUSD→JPYレートを掛ける(KHR専用レートは使わない)
+  if (currency === "KHR") return usdJpy == null ? null : usdJpy / KHR_TO_USD;
+  return null;
 }
 function refreshRateForm() {
   const ym = `${viewYear}-${String(viewMonth).padStart(2, "0")}`;
   document.getElementById("rate-month-label").textContent = `${viewYear}年${viewMonth}月`;
   const rec = ratesMap[ym];
   document.getElementById("rate-usd").value = rec?.usd_jpy ?? "";
-  document.getElementById("rate-khr").value = rec?.khr_jpy ?? "";
 }
 async function saveRate() {
   const errEl = document.getElementById("rate-err");
   const ym = `${viewYear}-${String(viewMonth).padStart(2, "0")}`;
   const usd = document.getElementById("rate-usd").value ? parseFloat(document.getElementById("rate-usd").value) : null;
-  const khr = document.getElementById("rate-khr").value ? parseFloat(document.getElementById("rate-khr").value) : null;
-  const { error } = await db.from("kakeibo_exchange_rates").upsert({ year_month: ym, usd_jpy: usd, khr_jpy: khr, updated_at: new Date().toISOString() });
+  const { error } = await db.from("kakeibo_exchange_rates").upsert({ year_month: ym, usd_jpy: usd, updated_at: new Date().toISOString() });
   if (error) { errEl.textContent = "保存エラー: " + error.message; return; }
   errEl.textContent = "";
   await loadRates();
@@ -396,17 +399,17 @@ function render() {
   const rows = currentFilterRows();
   const q = document.getElementById("f-search").value.trim().toLowerCase();
 
-  // 集計(通貨別、支出/収入/貯蓄は明確に区別する)
+  // 集計(USD建て。KHRは1USD=4000KHR固定でUSDに換算して合算する)
   const totalsEl = document.getElementById("totals");
   totalsEl.innerHTML = "";
-  ["USD", "KHR", "JPY"].forEach(cur => {
-    const curRows = rows.filter(r => r.currency === cur);
+  ["USD", "JPY"].forEach(cur => {
+    const curRows = rows.filter(r => r.currency === cur || (cur === "USD" && r.currency === "KHR"));
     if (!curRows.length) return;
-    const expense = curRows.filter(r => r.entry_type === "expense").reduce((s, r) => s + Number(r.amount), 0);
-    const income = curRows.filter(r => r.entry_type === "income").reduce((s, r) => s + Number(r.amount), 0);
+    const expense = curRows.filter(r => r.entry_type === "expense").reduce((s, r) => s + toUSD(r.amount, r.currency), 0);
+    const income = curRows.filter(r => r.entry_type === "income").reduce((s, r) => s + toUSD(r.amount, r.currency), 0);
     const box = document.createElement("div");
     box.className = "total-box";
-    box.innerHTML = `<div class="cur">${cur}</div>
+    box.innerHTML = `<div class="cur">${cur}${cur === "USD" && rows.some(r => r.currency === "KHR") ? "(リエル換算込み)" : ""}</div>
       <div class="amt">${fmt(expense, cur)}</div>
       <div class="sub-line">支出${income ? ` ｜ 収入 ${fmt(income, cur)} ｜ 収支 ${fmt(income - expense, cur)}` : ""}</div>`;
     totalsEl.appendChild(box);
@@ -435,19 +438,20 @@ function render() {
 
   if (!totalsEl.innerHTML) totalsEl.innerHTML = '<span class="muted">該当データがありません</span>';
 
-  // カテゴリ内訳の円グラフ(支出のみ、通貨ごとに1枚)
+  // カテゴリ内訳の円グラフ(支出のみ。KHRはUSDに換算してUSDのグラフへ合算)
   const donutArea = document.getElementById("donut-area");
   donutArea.innerHTML = "";
-  ["USD", "KHR", "JPY"].forEach(cur => {
+  ["USD", "JPY"].forEach(cur => {
     const byCat = {};
-    rows.filter(r => r.currency === cur && r.entry_type === "expense")
-      .forEach(r => { byCat[r.category_major] = (byCat[r.category_major] || 0) + Number(r.amount); });
+    rows.filter(r => (r.currency === cur || (cur === "USD" && r.currency === "KHR")) && r.entry_type === "expense")
+      .forEach(r => { byCat[r.category_major] = (byCat[r.category_major] || 0) + toUSD(r.amount, r.currency); });
     const entries = Object.entries(byCat);
     if (!entries.length) return;
     const total = entries.reduce((s, [, amt]) => s + amt, 0);
     const block = document.createElement("div");
     block.className = "currency-block";
-    block.innerHTML = `<div class="cur-label">${cur} の支出内訳</div>` + buildDonut(entries, cur, total);
+    const curLabel = cur === "USD" && rows.some(r => r.currency === "KHR") ? "USD(リエル換算込み)" : cur;
+    block.innerHTML = `<div class="cur-label">${curLabel} の支出内訳</div>` + buildDonut(entries, cur, total);
     donutArea.appendChild(block);
   });
   if (!donutArea.innerHTML) donutArea.innerHTML = '<span class="muted">この期間の支出データがありません</span>';
@@ -470,11 +474,15 @@ function render() {
       : `${highlightMatch(r.store_name || "(不明)", q)}${r.memo ? `<div class="items-detail">📝 ${highlightMatch(r.memo, q)}</div>` : ""}${itemsHtml}`;
     const amtClass = isIncome ? "income-amt" : isSaving ? "saving-amt" : "";
     const sign = isIncome || (isSaving && Number(r.amount) > 0) ? "+" : "";
+    // リエルは常に1USD=4000KHR固定でドル換算して表示(元の金額はその下に小さく残す)
+    const displayAmt = r.currency === "KHR" ? toUSD(r.amount, r.currency) : Number(r.amount);
+    const displayCur = r.currency === "KHR" ? "USD" : r.currency;
+    const origNote = r.currency === "KHR" ? `<div class="items-detail" style="text-align:right">${fmt(r.amount, "KHR")}</div>` : "";
     tr.innerHTML = `
       <td style="white-space:nowrap">${r.purchased_at || "-"}${r.purchased_time ? `<div class="items-detail">${r.purchased_time.slice(0, 5)}</div>` : ""}</td>
       <td>${nameCell}</td>
       <td><span class="tag ${isIncome ? "income" : ""} ${isSaving ? "saving" : ""}">${highlightMatch(r.category_major, q)}${r.category_sub && r.category_sub !== "その他" ? " / " + highlightMatch(r.category_sub, q) : ""}</span></td>
-      <td class="num ${amtClass}">${sign}${fmt(r.amount, r.currency)}</td>
+      <td class="num ${amtClass}">${sign}${fmt(displayAmt, displayCur)}${origNote}</td>
       <td style="white-space:nowrap">
         <button class="edit-link" onclick="startEdit(${r.id})">編集</button>
         <button class="danger-link" onclick="removeEntry(${r.id})">削除</button>
@@ -598,8 +606,10 @@ function renderSavingsBalances() {
     byAccount[key].balance += Number(r.amount);
   });
   el.innerHTML = Object.values(byAccount)
-    .sort((a, b) => b.balance - a.balance)
-    .map(a => `<div class="savings-row"><span class="acct-name">🏦 ${esc(a.name)}</span><span class="acct-bal">${fmt(a.balance, a.currency)}</span></div>`)
+    .sort((a, b) => toUSD(b.balance, b.currency) - toUSD(a.balance, a.currency))
+    .map(a => a.currency === "KHR"
+      ? `<div class="savings-row"><span class="acct-name">🏦 ${esc(a.name)}</span><span class="acct-bal">${fmt(toUSD(a.balance, "KHR"), "USD")} <span class="muted">(${fmt(a.balance, "KHR")})</span></span></div>`
+      : `<div class="savings-row"><span class="acct-name">🏦 ${esc(a.name)}</span><span class="acct-bal">${fmt(a.balance, a.currency)}</span></div>`)
     .join("");
 }
 
